@@ -9,62 +9,47 @@
 html,body{width:100%;height:100%;background:#000;overflow:hidden;touch-action:none;}
 #wrap{display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;}
 canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges;}
-#btns{display:flex;justify-content:space-between;align-items:center;width:100%;padding:0 16px 8px;position:absolute;bottom:0;left:0;pointer-events:none;}
-.btn-group{display:flex;gap:10px;pointer-events:all;}
-.gbtn{width:64px;height:64px;border-radius:50%;border:2px solid rgba(255,255,255,0.3);background:rgba(255,255,255,0.08);color:#fff;font-size:22px;display:flex;align-items:center;justify-content:center;user-select:none;-webkit-user-select:none;cursor:pointer;transition:background 0.1s;}
-.gbtn:active,.gbtn.pressed{background:rgba(255,180,0,0.35);border-color:rgba(255,180,0,0.7);}
-#btn-shoot{width:72px;height:72px;background:rgba(200,60,0,0.25);border-color:rgba(255,100,0,0.5);font-size:26px;}
-#btn-shoot.pressed{background:rgba(255,80,0,0.5);}
+#btns{display:flex;justify-content:space-between;align-items:center;width:100%;padding:0 24px 12px;position:absolute;bottom:0;left:0;pointer-events:none;}
+#stick-wrap{width:100px;height:100px;position:relative;pointer-events:all;}
+#stick-base{width:100px;height:100px;border-radius:50%;border:2px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.06);position:absolute;top:0;left:0;}
+#stick-knob{width:44px;height:44px;border-radius:50%;border:2px solid rgba(255,200,80,0.6);background:rgba(255,180,0,0.2);position:absolute;top:28px;left:28px;transition:transform 0.05s;}
+.gbtn{width:72px;height:72px;border-radius:50%;border:2px solid rgba(255,100,0,0.5);background:rgba(200,60,0,0.25);color:#fff;font-size:26px;display:flex;align-items:center;justify-content:center;user-select:none;-webkit-user-select:none;cursor:pointer;pointer-events:all;}
+.gbtn.pressed{background:rgba(255,80,0,0.5);border-color:rgba(255,160,0,0.8);}
 </style>
 </head>
 <body>
-<div id="wrap">
-  <canvas id="c"></canvas>
-</div>
+<div id="wrap"><canvas id="c"></canvas></div>
 <div id="btns">
-  <div class="btn-group">
-    <div class="gbtn" id="btn-left">◀</div>
-    <div class="gbtn" id="btn-right">▶</div>
+  <div id="stick-wrap">
+    <div id="stick-base"></div>
+    <div id="stick-knob"></div>
   </div>
-  <div class="btn-group">
-    <div class="gbtn" id="btn-shoot">🔫</div>
-  </div>
+  <div class="gbtn" id="btn-shoot">🔫</div>
 </div>
 <script>
 const C=document.getElementById('c');
 const ctx=C.getContext('2d');
 const GW=320,GH=480;
-let scale=1,offsetX=0,offsetY=0;
-
+let scale=1;
 function resize(){
   const vw=window.innerWidth,vh=window.innerHeight;
-  // reserve ~88px for buttons on mobile
   const hasTouch='ontouchstart' in window;
   const avail=hasTouch?vh-88:vh;
-  scale=Math.min(vw/GW, avail/GH);
-  C.width=Math.round(GW*scale);
-  C.height=Math.round(GH*scale);
+  scale=Math.min(vw/GW,avail/GH);
+  C.width=Math.round(GW*scale); C.height=Math.round(GH*scale);
   ctx.setTransform(scale,0,0,scale,0,0);
-  // center buttons width to canvas
-  const bw=document.getElementById('btns');
-  bw.style.width=C.width+'px';
-  bw.style.left=((vw-C.width)/2)+'px';
+  const b=document.getElementById('btns');
+  b.style.width=C.width+'px'; b.style.left=((vw-C.width)/2)+'px';
 }
-resize();
-window.addEventListener('resize',resize);
+resize(); window.addEventListener('resize',resize);
 
-// ===== INPUT =====
+// ── INPUT ──────────────────────────────────────────────
 const keys={left:false,right:false,shoot:false};
 let shootJustPressed=false;
-
-// Keyboard
 window.addEventListener('keydown',e=>{
   if(e.code==='ArrowLeft'||e.code==='KeyA') keys.left=true;
   if(e.code==='ArrowRight'||e.code==='KeyD') keys.right=true;
-  if(e.code==='Space'||e.code==='KeyZ'){
-    if(!keys.shoot) shootJustPressed=true;
-    keys.shoot=true;
-  }
+  if(e.code==='Space'||e.code==='KeyZ'){if(!keys.shoot)shootJustPressed=true;keys.shoot=true;}
   if(gamePhase==='title'||gamePhase==='gameover') initGame();
   e.preventDefault();
 },{passive:false});
@@ -73,46 +58,85 @@ window.addEventListener('keyup',e=>{
   if(e.code==='ArrowRight'||e.code==='KeyD') keys.right=false;
   if(e.code==='Space'||e.code==='KeyZ') keys.shoot=false;
 });
+// ── JOYSTICK ──────────────────────────────────────────
+const stickWrap=document.getElementById('stick-wrap');
+const stickKnob=document.getElementById('stick-knob');
+const STICK_R=30; // max knob travel radius
+let stickTouchId=null, stickOriginX=0;
 
-// Touch buttons
-function bindBtn(id,key){
-  const el=document.getElementById(id);
-  el.addEventListener('touchstart',e=>{e.preventDefault();keys[key]=true;if(key==='shoot')shootJustPressed=true;el.classList.add('pressed');},{passive:false});
-  el.addEventListener('touchend',e=>{e.preventDefault();keys[key]=false;el.classList.remove('pressed');},{passive:false});
-  el.addEventListener('touchcancel',e=>{keys[key]=false;el.classList.remove('pressed');});
+function stickMove(cx){
+  const wrap=stickWrap.getBoundingClientRect();
+  const ox=wrap.left+wrap.width/2;
+  const dx=cx-ox;
+  const clamped=Math.max(-STICK_R,Math.min(STICK_R,dx));
+  stickKnob.style.transform=`translateX(${clamped}px)`;
+  const ratio=clamped/STICK_R;
+  keys.left=ratio<-0.25;
+  keys.right=ratio>0.25;
 }
-bindBtn('btn-left','left');
-bindBtn('btn-right','right');
-bindBtn('btn-shoot','shoot');
-
-// Canvas click for overlays
-C.addEventListener('click',e=>{
-  const r=C.getBoundingClientRect();
-  handleOverlayClick((e.clientX-r.left)/scale,(e.clientY-r.top)/scale);
-});
-C.addEventListener('touchend',e=>{
+stickWrap.addEventListener('touchstart',e=>{
   e.preventDefault();
-  const r=C.getBoundingClientRect();
+  if(stickTouchId!==null) return;
   const t=e.changedTouches[0];
-  handleOverlayClick((t.clientX-r.left)/scale,(t.clientY-r.top)/scale);
+  stickTouchId=t.identifier;
+  stickMove(t.clientX);
 },{passive:false});
+stickWrap.addEventListener('touchmove',e=>{
+  e.preventDefault();
+  for(const t of e.changedTouches){
+    if(t.identifier===stickTouchId) stickMove(t.clientX);
+  }
+},{passive:false});
+function stickRelease(e){
+  for(const t of e.changedTouches){
+    if(t.identifier===stickTouchId){
+      stickTouchId=null;
+      keys.left=false; keys.right=false;
+      stickKnob.style.transform='translateX(0px)';
+    }
+  }
+}
+stickWrap.addEventListener('touchend',stickRelease,{passive:false});
+stickWrap.addEventListener('touchcancel',stickRelease,{passive:false});
 
-// ===== CONSTANTS =====
+// shoot button
+const shootEl=document.getElementById('btn-shoot');
+shootEl.addEventListener('touchstart',e=>{e.preventDefault();keys.shoot=true;shootJustPressed=true;shootEl.classList.add('pressed');},{passive:false});
+shootEl.addEventListener('touchend',e=>{e.preventDefault();keys.shoot=false;shootEl.classList.remove('pressed');},{passive:false});
+shootEl.addEventListener('touchcancel',()=>{keys.shoot=false;shootEl.classList.remove('pressed');});
+C.addEventListener('click',e=>{const r=C.getBoundingClientRect();handleOverlayClick((e.clientX-r.left)/scale,(e.clientY-r.top)/scale);});
+C.addEventListener('touchend',e=>{e.preventDefault();const r=C.getBoundingClientRect(),t=e.changedTouches[0];handleOverlayClick((t.clientX-r.left)/scale,(t.clientY-r.top)/scale);},{passive:false});
+
+// ── CONSTANTS ──────────────────────────────────────────
 const PLAYER_W=14,PLAYER_H=18;
-const BASE_GRAVITY=0.18;       // start gentle
-const MAX_GRAVITY=0.52;        // accelerates to this
-const FALL_ACCEL=0.0018;       // how fast gravity ramps up
-const TERMINAL_VEL=12;
-const SHOT_RECOIL=-3.8;
+const BASE_GRAV=0.18,MAX_GRAV=0.52,FALL_ACCEL=0.0018,TERM_VEL=12;
+const BASE_RECOIL=-3.8;
+// Floor depth: how many px of world-Y to clear per floor
+const FLOOR_DEPTH=1200;
 
-// ===== WEAPONS =====
-const WEAPONS={
-  pistol: {name:'PISTOL', color:'#4f4',bc:'#ff4',spd:10,rate:15,spread:0,   pellets:1,dmgM:1.0, recoil:SHOT_RECOIL,    desc:'バランス型',detail:'単発・安定'},
-  shotgun:{name:'SHOTGUN',color:'#f84',bc:'#f40',spd:8, rate:30,spread:0.25,pellets:5,dmgM:0.65,recoil:SHOT_RECOIL*1.7,desc:'超近距離', detail:'5発・大反動'},
-  smg:    {name:'SMG',    color:'#4af',bc:'#adf',spd:11,rate:5, spread:0.1, pellets:1,dmgM:0.5, recoil:SHOT_RECOIL*0.3,desc:'高速連射', detail:'押しっぱなし可'},
-  sniper: {name:'SNIPER', color:'#f4f',bc:'#faf',spd:18,rate:45,spread:0,   pellets:1,dmgM:4.0, recoil:SHOT_RECOIL*2.2,desc:'超高威力', detail:'単発・超反動'},
-  magic:  {name:'MAGIC',  color:'#ff4',bc:'#fa0',spd:6, rate:20,spread:0.12,pellets:3,dmgM:1.1, recoil:SHOT_RECOIL*0.8,desc:'魔法3連',  detail:'貫通あり'},
+// ── WEAPONS ────────────────────────────────────────────
+const BASE_WEAPONS={
+  pistol: {name:'PISTOL', color:'#4f4',bc:'#ff4',spd:10,rate:15,spread:0,   pellets:1,dmgM:1.0, recoil:BASE_RECOIL,    desc:'バランス型', detail:'単発・安定'},
+  shotgun:{name:'SHOTGUN',color:'#f84',bc:'#f40',spd:8, rate:30,spread:0.25,pellets:5,dmgM:0.65,recoil:BASE_RECOIL*1.7,desc:'超近距離',  detail:'5発・大反動'},
+  smg:    {name:'SMG',    color:'#4af',bc:'#adf',spd:11,rate:5, spread:0.1, pellets:1,dmgM:0.3, recoil:BASE_RECOIL*0.3,desc:'高速連射',  detail:'連射・低ダメ'},
+  sniper: {name:'SNIPER', color:'#f4f',bc:'#faf',spd:18,rate:45,spread:0,   pellets:1,dmgM:4.0, recoil:BASE_RECOIL*2.2,desc:'超高威力',  detail:'単発・超反動'},
+  magic:  {name:'MAGIC',  color:'#ff4',bc:'#fa0',spd:6, rate:20,spread:0.12,pellets:3,dmgM:1.1, recoil:BASE_RECOIL*0.8,desc:'魔法3連',   detail:'貫通あり'},
 };
+
+// ── RANDOM BONUS POOL (弱め・重ねがけ前提) ──────────────
+// type: rate_up / pellet_up / dmg_up / spread_down / recoil_up
+const BONUS_POOL=[
+  {id:'rate_up_s',  name:'連射速度+5%',  desc:'クールダウン-5%',   fn:w=>{w.rate=Math.max(2,Math.floor(w.rate*0.95));}},
+  {id:'rate_up_m',  name:'連射速度+10%', desc:'クールダウン-10%',  fn:w=>{w.rate=Math.max(2,Math.floor(w.rate*0.90));}},
+  {id:'pellet_up',  name:'弾数+1',       desc:'1射の弾数が増える', fn:w=>{w.pellets+=1;}},
+  {id:'dmg_up_s',   name:'ダメージ+8%',  desc:'武器倍率+0.08',     fn:w=>{w.dmgM=+(w.dmgM+0.08).toFixed(3);}},
+  {id:'dmg_up_m',   name:'ダメージ+15%', desc:'武器倍率+0.15',     fn:w=>{w.dmgM=+(w.dmgM+0.15).toFixed(3);}},
+  {id:'spread_dn',  name:'精度+',        desc:'弾のばらつき-20%',  fn:w=>{w.spread=+(w.spread*0.8).toFixed(3);}},
+  {id:'spd_up',     name:'弾速+10%',     desc:'弾が速くなる',      fn:w=>{w.spd=+(w.spd*1.1).toFixed(2);}},
+  {id:'recoil_up',  name:'反動強化+10%', desc:'跳ね上がりが増す',  fn:w=>{w.recoil=+(w.recoil*1.1).toFixed(3);}},
+];
+
+// ── SHOP POOL ──────────────────────────────────────────
 const SHOP_POOL=[
   {name:'DMG ×1.5', desc:'ダメージ1.5倍',   price:f=>80+f*30,  fn:()=>{S.dmgMult*=1.5;}},
   {name:'DMG ×2',   desc:'ダメージ2倍!!',   price:f=>200+f*80, fn:()=>{S.dmgMult*=2;}},
@@ -121,21 +145,21 @@ const SHOP_POOL=[
   {name:'COMBO PWR', desc:'コンボ倍率UP',    price:f=>120+f*40, fn:()=>{S.comboPwr+=0.15;}},
   {name:'GOLD DMG',  desc:'金×0.05=DMG加算',price:f=>150+f*50, fn:()=>{S.goldDmg=true;}},
 ];
+
 const ENEMY_TYPES=[
-  {type:'zombie',w:16,h:20,hpB:20,col:'#3a3',spd:0.7,sc:10,g:1,fly:false},
-  {type:'demon', w:14,h:18,hpB:12,col:'#a22',spd:1.6,sc:15,g:2,fly:false},
-  {type:'ghost', w:16,h:20,hpB:30,col:'#84f',spd:0.4,sc:20,g:3,fly:true},
-  {type:'bat',   w:14,h:10,hpB:8, col:'#844',spd:2.2,sc:12,g:1,fly:true},
+  {type:'zombie',w:16,h:20,hpB:20,col:'#3a3',spd:0.7,sc:10,g:2, fly:false},
+  {type:'demon', w:14,h:18,hpB:12,col:'#a22',spd:1.6,sc:15,g:4, fly:false},
+  {type:'ghost', w:16,h:20,hpB:30,col:'#84f',spd:0.4,sc:20,g:5, fly:true},
+  {type:'bat',   w:14,h:10,hpB:8, col:'#844',spd:2.2,sc:12,g:3, fly:true},
 ];
 
-// ===== STATE =====
+// ── STATE ──────────────────────────────────────────────
 let S=null;
 let gamePhase='title';
 let camY=0;
 let platforms=[],enemies=[],bullets=[],ebullets=[],particles=[],dmgTexts=[];
-let frame=0;
-let worldBottom=0;
-let weaponChoices=[],shopItems=[];
+let frame=0,worldBottom=0;
+let weaponChoices=[],shopItems=[],bonusChoice=null;
 
 function initGame(){
   S={
@@ -145,39 +169,41 @@ function initGame(){
     baseDmg:10,dmgMult:1,
     comboPwr:0.1,combo:0,comboTimer:0,
     goldDmg:false,
-    weapon:'pistol',fireTimer:0,
+    weapon:'pistol',
+    // per-weapon mutable stats (deep copy)
+    wStats:JSON.parse(JSON.stringify(BASE_WEAPONS)),
+    fireTimer:0,
     invincible:0,
     totalDmg:0,score:0,
     isBoss:false,bossKilled:false,
-    floorEnemies:0,floorTarget:6,
-    gravity:BASE_GRAVITY,   // current gravity, ramps up
-    fallTime:0,             // frames since last grounded
+    gravity:BASE_GRAV,fallTime:0,
+    // floor progress
+    floorStartY:0,   // camY when floor started
+    floorDone:false, // flag to prevent double-trigger
   };
   camY=0; worldBottom=0;
-  platforms=[];enemies=[];bullets=[];ebullets=[];particles=[];dmgTexts=[];
+  platforms=[]; enemies=[]; bullets=[]; ebullets=[]; particles=[]; dmgTexts=[];
   frame=0;
   platforms.push({x:GW/2-40,y:120,w:80,h:10});
   extendWorld();
   gamePhase='playing';
 }
 
-// ===== WORLD =====
+// ── WORLD ──────────────────────────────────────────────
 function extendWorld(){
   const need=camY+GH+700;
   while(worldBottom<need){
-    worldBottom+=85+Math.random()*30;
-    const w=50+Math.random()*80;
-    const x=Math.random()*(GW-w-20)+10;
+    worldBottom+=80+Math.random()*35;
+    const w=50+Math.random()*80,x=Math.random()*(GW-w-20)+10;
     platforms.push({x,y:worldBottom,w,h:10});
-    if(worldBottom>200&&Math.random()<0.75)
-      spawnEnemyAt(x+w/2+(Math.random()-.5)*60, worldBottom-30-Math.random()*40);
+    if(worldBottom>300&&Math.random()<0.75)
+      spawnEnemyAt(x+w/2+(Math.random()-.5)*60, worldBottom-25-Math.random()*40);
   }
-  // prune
   platforms=platforms.filter(p=>p.y>camY-100);
   enemies=enemies.filter(e=>e.y>camY-300);
 }
 
-// ===== ENEMIES =====
+// ── ENEMIES ────────────────────────────────────────────
 function spawnEnemyAt(x,y){
   const t=ENEMY_TYPES[Math.floor(Math.random()*ENEMY_TYPES.length)];
   const hp=t.hpB+S.floor*8;
@@ -186,12 +212,14 @@ function spawnEnemyAt(x,y){
 }
 function spawnBoss(){
   const hp=300+S.floor*200;
-  enemies.push({type:'boss',x:GW/2,y:camY+80,vx:1.5,vy:0,w:36,h:36,hp,maxHp:hp,col:'#c00',dead:false,shootTimer:50,phase:1,fly:true,g:40+S.floor*15,sc:200});
+  enemies.push({type:'boss',x:GW/2,y:camY+80,vx:1.5,vy:0,w:36,h:36,hp,maxHp:hp,
+    col:'#c00',dead:false,shootTimer:50,phase:1,fly:true,g:40+S.floor*15,sc:200});
 }
 
-// ===== COMBAT =====
+// ── COMBAT ─────────────────────────────────────────────
+function getW(){ return S.wStats[S.weapon]; }
 function calcDmg(){
-  let d=S.baseDmg*S.dmgMult;
+  let d=S.baseDmg*S.dmgMult*getW().dmgM;
   if(S.goldDmg) d+=S.gold*0.05;
   if(S.combo>=3) d*=(1+S.combo*S.comboPwr);
   d*=(1+(S.floor-1)*0.12);
@@ -205,100 +233,90 @@ function hitEnemy(e,dmg){
   if(e.hp<=0) killEnemy(e);
 }
 function killEnemy(e){
-  e.dead=true; S.kills++; S.floorEnemies++;
+  e.dead=true; S.kills++;
   S.gold+=(e.g||0); S.score+=(e.sc||0);
   for(let i=0;i<16;i++) spawnPtcl(e.x,e.y,'#fd0');
-  if(e.type==='boss'){S.baseDmg=Math.floor(S.baseDmg*1.5);S.bossKilled=true;}
+  if(e.type==='boss'){S.baseDmg=Math.floor(S.baseDmg*1.5);S.bossKilled=true;
+    for(let i=0;i<30;i++) spawnPtcl(e.x,e.y+(Math.random()-.5)*40,'#f40');}
 }
 function spawnPtcl(x,y,col){
   particles.push({x,y,vx:(Math.random()-.5)*5,vy:-Math.random()*5,life:20+Math.random()*10,col,r:2+Math.random()*2});
 }
 function shoot(){
-  const w=WEAPONS[S.weapon];
-  const dmg=calcDmg()*w.dmgM;
+  const w=getW();
+  const dmg=calcDmg(); // dmgM already inside calcDmg via getW
   for(let i=0;i<w.pellets;i++){
     const a=Math.PI/2+(Math.random()-.5)*w.spread*2;
     bullets.push({x:S.x,y:S.y+PLAYER_H/2,vx:Math.cos(a)*w.spd,vy:Math.sin(a)*w.spd,
       dmg,col:w.bc,pierce:S.weapon==='magic',hit:[],life:80,dead:false});
   }
-  S.vy+=w.recoil;
-  S.onGround=false;
-  // reset fall accel on shoot (recoil gives airtime)
+  S.vy+=w.recoil; S.onGround=false;
   for(let i=0;i<4;i++) spawnPtcl(S.x,S.y+PLAYER_H/2,w.color);
 }
 
-// ===== UPDATE =====
+// ── UPDATE ─────────────────────────────────────────────
 function update(){
   if(gamePhase!=='playing'&&gamePhase!=='bossWarn') return;
   frame++;
 
-  // --- Fall acceleration ---
-  if(S.onGround){
-    S.fallTime=0;
-    S.gravity=BASE_GRAVITY;
-  } else {
-    S.fallTime++;
-    S.gravity=Math.min(MAX_GRAVITY, BASE_GRAVITY+S.fallTime*FALL_ACCEL);
-  }
+  // gravity ramp
+  if(S.onGround){S.fallTime=0;S.gravity=BASE_GRAV;}
+  else{S.fallTime++;S.gravity=Math.min(MAX_GRAV,BASE_GRAV+S.fallTime*FALL_ACCEL);}
 
-  // --- Player movement ---
+  // movement
   const spd=3.2;
-  if(keys.left)  S.vx+= (-spd-S.vx)*0.25;
+  if(keys.left)  S.vx+=(-spd-S.vx)*0.25;
   else if(keys.right) S.vx+=( spd-S.vx)*0.25;
   else S.vx*=0.75;
-
   S.vy+=S.gravity;
-  S.vy=Math.max(S.vy,-18);
-  S.vy=Math.min(S.vy,TERMINAL_VEL);
-  S.x+=S.vx; S.y+=S.vy;
-  S.onGround=false;
+  S.vy=Math.max(S.vy,-18); S.vy=Math.min(S.vy,TERM_VEL);
+  S.x+=S.vx; S.y+=S.vy; S.onGround=false;
+  if(S.x<0)S.x=GW; if(S.x>GW)S.x=0;
 
-  // wrap
-  if(S.x<0) S.x=GW; if(S.x>GW) S.x=0;
-
-  // platform collision (falling down only)
   if(S.vy>0){
     for(const p of platforms){
       if(S.x+PLAYER_W/2>p.x&&S.x-PLAYER_W/2<p.x+p.w){
-        const bot=S.y+PLAYER_H/2, prev=bot-S.vy;
+        const bot=S.y+PLAYER_H/2,prev=bot-S.vy;
         if(prev<=p.y&&bot>=p.y){S.y=p.y-PLAYER_H/2;S.vy=0;S.onGround=true;break;}
       }
     }
   }
 
-  // --- Shooting ---
+  // shooting
   if(S.fireTimer>0) S.fireTimer--;
-  const w=WEAPONS[S.weapon];
+  const w=getW();
   const smgAuto=S.weapon==='smg'&&keys.shoot;
   if((shootJustPressed||smgAuto)&&S.fireTimer===0){shoot();S.fireTimer=w.rate;}
   shootJustPressed=false;
 
   // camera
-  const tgt=S.y-GH*0.28;
-  if(tgt>camY) camY+=(tgt-camY)*0.12;
+  const tgt=S.y-GH*0.28; if(tgt>camY) camY+=(tgt-camY)*0.12;
   extendWorld();
 
-  // --- Floor clear check ---
-  const alive=enemies.filter(e=>!e.dead&&e.y>camY-100&&e.y<camY+GH+300);
-  if(alive.length===0&&S.floorEnemies>=S.floorTarget){triggerFloorClear();return;}
+  // ── FLOOR CLEAR: depth-based ──────────────────────────
+  if(!S.floorDone && camY - S.floorStartY >= FLOOR_DEPTH){
+    S.floorDone=true;
+    triggerFloorClear();
+    return;
+  }
 
-  // --- Bullets ---
+  // bullets
   for(const b of bullets){
-    b.x+=b.vx;b.y+=b.vy;b.life--;
+    b.x+=b.vx; b.y+=b.vy; b.life--;
     if(b.life<=0){b.dead=true;continue;}
     for(const e of enemies){
       if(e.dead) continue;
       if(b.pierce&&b.hit.includes(e)) continue;
       if(Math.abs(b.x-e.x)<e.w/2+4&&Math.abs(b.y-e.y)<e.h/2+4){
         hitEnemy(e,b.dmg);
-        if(b.pierce) b.hit.push(e); else b.dead=true;
+        if(b.pierce)b.hit.push(e); else b.dead=true;
         break;
       }
     }
   }
   bullets=bullets.filter(b=>!b.dead);
 
-  // --- Enemies ---
+  // enemies
   for(const e of enemies){
     if(e.dead) continue;
     if(e.y<camY-400||e.y>camY+GH+400) continue;
@@ -307,8 +325,7 @@ function update(){
       e.y+=Math.sin(frame*0.04+e.x*0.1)*0.7;
       e.x+=(S.x-e.x)*0.004; e.y+=(S.y-e.y)*0.004;
     } else {
-      e.vy+=BASE_GRAVITY*0.9; e.x+=e.vx; if(e.x<10||e.x>GW-10) e.vx*=-1;
-      e.y+=e.vy;
+      e.vy+=BASE_GRAV*0.9; e.x+=e.vx; if(e.x<10||e.x>GW-10) e.vx*=-1; e.y+=e.vy;
       for(const p of platforms){
         if(e.x+e.w/2>p.x&&e.x-e.w/2<p.x+p.w){
           const bot=e.y+e.h/2;
@@ -342,13 +359,12 @@ function update(){
       S.hp-=8+S.floor; S.invincible=50;
       if(S.hp<=0){gamePhase='gameover';return;}
     }
-    if(e.y>camY+GH+500) e.dead=true;
+    if(e.y>camY+GH+600) e.dead=true;
   }
   enemies=enemies.filter(e=>!e.dead);
 
-  // --- Enemy bullets ---
   for(const b of ebullets){
-    b.x+=b.vx;b.y+=b.vy;b.life--;
+    b.x+=b.vx; b.y+=b.vy; b.life--;
     if(b.life<=0){b.dead=true;continue;}
     if(S.invincible<=0&&Math.abs(b.x-S.x)<10&&Math.abs(b.y-S.y)<10){
       S.hp-=10+S.floor; b.dead=true; S.invincible=35;
@@ -357,49 +373,93 @@ function update(){
   }
   ebullets=ebullets.filter(b=>!b.dead);
 
-  // --- Particles / texts ---
   for(const p of particles){p.x+=p.vx;p.y+=p.vy;p.vy+=0.15;p.life--;p.r*=0.93;}
   particles=particles.filter(p=>p.life>0);
   for(const d of dmgTexts){d.y+=d.vy;d.vy*=0.92;d.life--;d.alpha=d.life/40;}
   dmgTexts=dmgTexts.filter(d=>d.life>0);
-
   if(S.invincible>0) S.invincible--;
   if(S.comboTimer>0) S.comboTimer--; else if(S.combo>0) S.combo=0;
 }
 
-// ===== FLOOR TRANSITIONS =====
+// ── FLOOR TRANSITIONS ──────────────────────────────────
 function triggerFloorClear(){
-  gamePhase='weaponSelect';
-  const wk=Object.keys(WEAPONS);
+  // build 4 weapon choices: 3 alternatives + keep current
+  const wk=Object.keys(BASE_WEAPONS);
   weaponChoices=[];
-  while(weaponChoices.length<3){
+  // "keep current" option first
+  const cur=S.wStats[S.weapon];
+  weaponChoices.push({key:S.weapon,...cur,keep:true});
+  while(weaponChoices.length<4){
     const k=wk[Math.floor(Math.random()*wk.length)];
-    if(!weaponChoices.find(c=>c.key===k)) weaponChoices.push({key:k,...WEAPONS[k]});
+    if(!weaponChoices.find(c=>c.key===k)){
+      // show base stats for new weapon
+      weaponChoices.push({key:k,...BASE_WEAPONS[k],keep:false});
+    }
   }
+  // pick 3 random bonuses for this floor
+  const pool=BONUS_POOL.slice().sort(()=>Math.random()-.5);
+  bonusChoice=pool.slice(0,3);
+  gamePhase='weaponSelect';
 }
-function openShop(){
+
+function applyBonus(bonusIdx){
+  const b=bonusChoice[bonusIdx];
+  b.fn(S.wStats[S.weapon]);
+}
+
+function openShop(weaponKey, bonusIdx){
+  // apply weapon choice
+  if(!S.wStats[weaponKey]){
+    // new weapon: start from base
+    S.wStats[weaponKey]=JSON.parse(JSON.stringify(BASE_WEAPONS[weaponKey]));
+  }
+  S.weapon=weaponKey;
+  // apply bonus
+  applyBonus(bonusIdx);
+
   S.floor++; S.isBoss=(S.floor%5===0); S.bossKilled=false;
-  S.floorEnemies=0; S.floorTarget=6+S.floor*2;
-  S.baseDmg=Math.floor(S.baseDmg*1.18);
-  bullets=[];ebullets=[];
+  S.baseDmg=Math.floor(S.baseDmg*1.15);
+  S.floorStartY=camY; S.floorDone=false;
+  bullets=[]; ebullets=[];
   enemies=enemies.filter(e=>!e.dead);
   if(S.isBoss) spawnBoss();
-  else{ const cnt=4+S.floor; for(let i=0;i<cnt;i++) spawnEnemyAt(Math.random()*(GW-60)+30, camY+GH*0.5+Math.random()*GH*0.9); }
+  else{
+    const cnt=5+S.floor;
+    for(let i=0;i<cnt;i++) spawnEnemyAt(Math.random()*(GW-60)+30, camY+GH*0.5+Math.random()*GH);
+  }
   shopItems=SHOP_POOL.slice().sort(()=>Math.random()-.5).slice(0,3).map(item=>({...item,price:item.price(S.floor),bought:false}));
   gamePhase='shop';
 }
 
-// ===== OVERLAY CLICK =====
+// ── OVERLAY STATE MACHINE ──────────────────────────────
+let selWeapon=null; // chosen weapon key before bonus
 function handleOverlayClick(mx,my){
-  if(gamePhase==='title'||gamePhase==='gameover'){ initGame(); return; }
+  if(gamePhase==='title'||gamePhase==='gameover'){initGame();return;}
+
   if(gamePhase==='weaponSelect'){
-    const cw=86,ch=100,gap=8,total=cw*3+gap*2;
-    const sx=(GW-total)/2, sy=GH/2-ch/2;
-    weaponChoices.forEach((w,i)=>{
-      const cx=sx+i*(cw+gap);
-      if(mx>=cx&&mx<=cx+cw&&my>=sy&&my<=sy+ch){ S.weapon=w.key; openShop(); }
-    });
+    // Step 1: pick weapon (4 cards)
+    if(selWeapon===null){
+      const cw=70,ch=95,gap=6,total=cw*4+gap*3;
+      const sx=(GW-total)/2,sy=GH/2-140;
+      weaponChoices.forEach((w,i)=>{
+        const cx=sx+i*(cw+gap);
+        if(mx>=cx&&mx<=cx+cw&&my>=sy&&my<=sy+ch) selWeapon=w.key;
+      });
+    } else {
+      // Step 2: pick bonus (3 cards)
+      const cw=88,ch=80,gap=8,total=cw*3+gap*2;
+      const sx=(GW-total)/2,sy=GH/2+10;
+      bonusChoice.forEach((b,i)=>{
+        const cx=sx+i*(cw+gap);
+        if(mx>=cx&&mx<=cx+cw&&my>=sy&&my<=sy+ch){
+          openShop(selWeapon,i);
+          selWeapon=null;
+        }
+      });
+    }
+    return;
   }
+
   if(gamePhase==='shop'){
     const iy=GH/2-55;
     shopItems.forEach((item,i)=>{
@@ -408,28 +468,34 @@ function handleOverlayClick(mx,my){
         S.gold-=item.price; item.fn(); item.bought=true;
       }
     });
-    // skip button
     if(mx>=GW/2-50&&mx<=GW/2+50&&my>=GH-56&&my<=GH-32){
-      if(S.isBoss){ gamePhase='bossWarn'; setTimeout(()=>{if(gamePhase==='bossWarn')gamePhase='playing';},2200); }
+      if(S.isBoss){gamePhase='bossWarn';setTimeout(()=>{if(gamePhase==='bossWarn')gamePhase='playing';},2200);}
       else gamePhase='playing';
     }
   }
 }
 
-// ===== DRAW =====
+// ── DRAW ───────────────────────────────────────────────
 function draw(){
-  if(!S){ drawTitle(); return; }
+  if(!S){drawTitle();return;}
   ctx.clearRect(0,0,GW,GH);
   const depth=Math.min(camY/4000,1);
-  ctx.fillStyle=`rgb(${8+depth*20|0},${8},${15+depth*5|0})`;
+  ctx.fillStyle=`rgb(${8+depth*20|0},8,${15+depth*5|0})`;
   ctx.fillRect(0,0,GW,GH);
-  // grid lines
   ctx.strokeStyle='rgba(60,0,80,0.12)'; ctx.lineWidth=1;
   for(let i=0;i<GW;i+=32){ctx.beginPath();ctx.moveTo(i,0);ctx.lineTo(i,GH);ctx.stroke();}
 
+  // floor depth progress bar
+  if(gamePhase==='playing'&&!S.floorDone){
+    const prog=Math.min((camY-S.floorStartY)/FLOOR_DEPTH,1);
+    ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(GW-10,0,8,GH);
+    ctx.fillStyle='#48f'; ctx.fillRect(GW-10,GH*(1-prog),8,GH*prog);
+    ctx.fillStyle='rgba(100,160,255,0.5)'; ctx.font='6px monospace'; ctx.textAlign='center';
+    ctx.fillText('NEXT',GW-6,GH-4); ctx.textAlign='left';
+  }
+
   ctx.save(); ctx.translate(0,-camY);
 
-  // Platforms
   for(const p of platforms){
     if(p.y+12<camY||p.y>camY+GH+12) continue;
     ctx.fillStyle='#1a0a28'; ctx.fillRect(p.x,p.y,p.w,10);
@@ -437,49 +503,39 @@ function draw(){
     ctx.fillStyle='rgba(90,40,130,0.18)';
     for(let bx=p.x+4;bx<p.x+p.w-4;bx+=16) ctx.fillRect(bx,p.y+3,14,6);
   }
-
-  // Particles
   for(const p of particles){
     ctx.globalAlpha=Math.max(0,p.life/30);
-    ctx.fillStyle=p.col; ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=p.col; ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.fill();
   }
   ctx.globalAlpha=1;
-
-  // Enemy bullets
   for(const b of ebullets){
-    ctx.fillStyle='#f60'; ctx.beginPath(); ctx.arc(b.x,b.y,4,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle='rgba(255,80,0,0.25)'; ctx.beginPath(); ctx.arc(b.x,b.y,7,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#f60'; ctx.beginPath();ctx.arc(b.x,b.y,4,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='rgba(255,80,0,0.25)'; ctx.beginPath();ctx.arc(b.x,b.y,7,0,Math.PI*2);ctx.fill();
   }
-
-  // Player bullets
   for(const b of bullets){
-    ctx.fillStyle=b.col; ctx.beginPath(); ctx.arc(b.x,b.y,3,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=b.col; ctx.beginPath();ctx.arc(b.x,b.y,3,0,Math.PI*2);ctx.fill();
   }
-
-  // Enemies
   for(const e of enemies){
     if(e.y+40<camY||e.y-40>camY+GH) continue;
     const fl=frame%6<3&&e.hp<e.maxHp;
     ctx.fillStyle=fl?'#fff':e.col;
     if(e.type==='boss'){
-      ctx.beginPath(); ctx.arc(e.x,e.y,18,0,Math.PI*2); ctx.fill();
+      ctx.beginPath();ctx.arc(e.x,e.y,18,0,Math.PI*2);ctx.fill();
       ctx.fillStyle='#800';
       ctx.beginPath();ctx.moveTo(e.x-14,e.y-14);ctx.lineTo(e.x-8,e.y-28);ctx.lineTo(e.x-2,e.y-16);ctx.fill();
       ctx.beginPath();ctx.moveTo(e.x+14,e.y-14);ctx.lineTo(e.x+8,e.y-28);ctx.lineTo(e.x+2,e.y-16);ctx.fill();
-      ctx.fillStyle='#f00'; ctx.beginPath();ctx.arc(e.x-7,e.y-4,5,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='#f00';ctx.beginPath();ctx.arc(e.x-7,e.y-4,5,0,Math.PI*2);ctx.fill();
       ctx.beginPath();ctx.arc(e.x+7,e.y-4,5,0,Math.PI*2);ctx.fill();
-      ctx.fillStyle='#ff0'; ctx.beginPath();ctx.arc(e.x-7,e.y-4,2,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='#ff0';ctx.beginPath();ctx.arc(e.x-7,e.y-4,2,0,Math.PI*2);ctx.fill();
       ctx.beginPath();ctx.arc(e.x+7,e.y-4,2,0,Math.PI*2);ctx.fill();
       ctx.fillStyle='#300';ctx.fillRect(e.x-30,e.y-34,60,5);
       ctx.fillStyle='#f00';ctx.fillRect(e.x-30,e.y-34,60*(e.hp/e.maxHp),5);
       ctx.fillStyle='#fff';ctx.font='7px monospace';ctx.textAlign='center';
-      ctx.fillText('DARK LORD',e.x,e.y+30); ctx.textAlign='left';
+      ctx.fillText('DARK LORD',e.x,e.y+30);ctx.textAlign='left';
     } else {
       ctx.fillRect(e.x-e.w/2,e.y-e.h/2,e.w,e.h);
-      ctx.fillStyle='#fff';
-      ctx.fillRect(e.x-5,e.y-e.h/2+3,4,4); ctx.fillRect(e.x+1,e.y-e.h/2+3,4,4);
-      ctx.fillStyle='#000';
-      ctx.fillRect(e.x-4,e.y-e.h/2+4,2,2); ctx.fillRect(e.x+2,e.y-e.h/2+4,2,2);
+      ctx.fillStyle='#fff';ctx.fillRect(e.x-5,e.y-e.h/2+3,4,4);ctx.fillRect(e.x+1,e.y-e.h/2+3,4,4);
+      ctx.fillStyle='#000';ctx.fillRect(e.x-4,e.y-e.h/2+4,2,2);ctx.fillRect(e.x+2,e.y-e.h/2+4,2,2);
       if(e.type==='ghost'){ctx.fillStyle='rgba(180,120,255,0.25)';ctx.beginPath();ctx.arc(e.x,e.y,e.w,0,Math.PI*2);ctx.fill();}
       if(e.type==='bat'){
         ctx.fillStyle=e.col;
@@ -492,20 +548,17 @@ function draw(){
       }
     }
   }
-
-  // Player
   if(!(S.invincible>0&&frame%4<2)){
     ctx.fillStyle='#8a0022';
     ctx.beginPath();ctx.moveTo(S.x-5,S.y-4);ctx.lineTo(S.x-14,S.y+12);ctx.lineTo(S.x-2,S.y+6);ctx.fill();
     ctx.fillStyle='#2244aa'; ctx.fillRect(S.x-PLAYER_W/2,S.y-PLAYER_H/2,PLAYER_W,PLAYER_H);
     ctx.fillStyle='#f0c080'; ctx.beginPath();ctx.arc(S.x,S.y-PLAYER_H/2-5,7,0,Math.PI*2);ctx.fill();
     ctx.fillStyle='#777'; ctx.fillRect(S.x-2,S.y+2,4,10);
-    if(S.fireTimer>WEAPONS[S.weapon].rate-5){
-      ctx.fillStyle='#ff8'; ctx.beginPath();ctx.arc(S.x,S.y+PLAYER_H/2+10,5,0,Math.PI*2);ctx.fill();
+    const w=getW();
+    if(S.fireTimer>w.rate-5){
+      ctx.fillStyle='#ff8';ctx.beginPath();ctx.arc(S.x,S.y+PLAYER_H/2+10,5,0,Math.PI*2);ctx.fill();
     }
   }
-
-  // Damage texts
   ctx.textAlign='center';
   for(const d of dmgTexts){
     ctx.globalAlpha=Math.max(0,d.alpha);
@@ -522,75 +575,103 @@ function draw(){
 
 function drawHUD(){
   if(!S) return;
-  // HP bar
   ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(5,5,110,11);
   ctx.fillStyle='#c22'; ctx.fillRect(5,5,110*(S.hp/S.maxHp),11);
   ctx.fillStyle='#f88'; ctx.font='8px monospace';
   ctx.fillText(`HP ${Math.ceil(S.hp)}/${S.maxHp}`,7,14);
-  // stats
   ctx.fillStyle='#adf'; ctx.fillText(`FL:${S.floor}${S.isBoss?' [BOSS]':''}`,5,28);
   ctx.fillStyle='#fff'; ctx.fillText(`DMG:${calcDmg().toLocaleString()}`,5,38);
-  ctx.fillStyle='#4f8'; ctx.fillText(WEAPONS[S.weapon].name,5,48);
+  ctx.fillStyle='#4f8'; ctx.fillText(getW().name,5,48);
   ctx.fillStyle='#fd8'; ctx.fillText(`G:${S.gold}`,5,58);
   ctx.fillStyle='#faf'; ctx.fillText(`KILLS:${S.kills}`,5,68);
-  // fall speed indicator
-  const fallPct=(S.gravity-BASE_GRAVITY)/(MAX_GRAVITY-BASE_GRAVITY);
+  const fallPct=(S.gravity-BASE_GRAV)/(MAX_GRAV-BASE_GRAV);
   if(fallPct>0.05){
-    ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(GW-36,5,30,6);
+    ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(GW-46,5,40,6);
     ctx.fillStyle=`rgb(${200+fallPct*55|0},${200-fallPct*180|0},0)`;
-    ctx.fillRect(GW-36,5,30*fallPct,6);
-    ctx.fillStyle='rgba(255,255,255,0.5)'; ctx.font='6px monospace';
-    ctx.textAlign='right'; ctx.fillText('SPEED',GW-5,20); ctx.textAlign='left';
+    ctx.fillRect(GW-46,5,40*fallPct,6);
   }
-  // combo
   if(S.combo>=3){
-    const sz=Math.min(10+S.combo,20);
-    ctx.fillStyle='#ff4'; ctx.font=`bold ${sz}px monospace`;
-    ctx.textAlign='right';
-    ctx.fillText(`${S.combo} COMBO!`,GW-5,22);
-    ctx.font='8px monospace';
-    ctx.fillText(`×${(1+S.combo*S.comboPwr).toFixed(1)}DMG`,GW-5,33);
+    ctx.fillStyle='#ff4'; ctx.font=`bold ${Math.min(10+S.combo,20)}px monospace`; ctx.textAlign='right';
+    ctx.fillText(`${S.combo} COMBO!`,GW-12,22);
+    ctx.font='8px monospace'; ctx.fillText(`×${(1+S.combo*S.comboPwr).toFixed(1)}DMG`,GW-12,33);
     ctx.textAlign='left';
   }
 }
 
 function drawOverlay(){
-  if(gamePhase==='playing'||gamePhase==='bossWarn'&&false) return;
+  if(gamePhase==='playing') return;
   if(gamePhase==='bossWarn'){
     ctx.fillStyle='rgba(0,0,0,0.65)'; ctx.fillRect(0,0,GW,GH);
     ctx.fillStyle='#f00'; ctx.font=`bold ${14+Math.sin(frame*0.25)*3|0}px monospace`; ctx.textAlign='center';
     ctx.fillText('⚠ BOSS ⚠',GW/2,GH/2-12);
-    ctx.fillStyle='#f88'; ctx.font='9px monospace';
-    ctx.fillText('DARK LORD APPROACHES',GW/2,GH/2+10);
+    ctx.fillStyle='#f88'; ctx.font='9px monospace'; ctx.fillText('DARK LORD APPROACHES',GW/2,GH/2+10);
     ctx.textAlign='left'; return;
   }
-  if(gamePhase==='title'){ drawTitle(); return; }
+  if(gamePhase==='title'){drawTitle();return;}
+
   if(gamePhase==='weaponSelect'){
-    ctx.fillStyle='rgba(0,0,0,0.92)'; ctx.fillRect(0,0,GW,GH);
-    ctx.fillStyle='#fa0'; ctx.font='bold 13px monospace'; ctx.textAlign='center';
-    ctx.fillText('WEAPON SELECT',GW/2,70);
-    ctx.fillStyle='#666'; ctx.font='8px monospace';
-    ctx.fillText('フロアクリア！武器を選べ',GW/2,86);
-    const cw=86,ch=100,gap=8,total=cw*3+gap*2;
-    const sx=(GW-total)/2,sy=GH/2-ch/2;
-    weaponChoices.forEach((w,i)=>{
-      const cx=sx+i*(cw+gap);
-      ctx.fillStyle='#111'; ctx.fillRect(cx,sy,cw,ch);
-      ctx.strokeStyle='#444'; ctx.lineWidth=1; ctx.strokeRect(cx,sy,cw,ch);
-      ctx.fillStyle=w.color; ctx.font='bold 8px monospace'; ctx.textAlign='center';
-      ctx.fillText(w.name,cx+cw/2,sy+18);
-      ctx.fillStyle='#888'; ctx.font='7px monospace';
-      ctx.fillText(w.desc,cx+cw/2,sy+34);
-      ctx.fillStyle='#4fa'; ctx.fillText(w.detail,cx+cw/2,sy+46);
-    });
-    ctx.textAlign='left'; return;
-  }
-  if(gamePhase==='shop'||gamePhase==='building_shop'){
     ctx.fillStyle='rgba(0,0,0,0.93)'; ctx.fillRect(0,0,GW,GH);
-    ctx.fillStyle='#c40'; ctx.font='bold 14px monospace'; ctx.textAlign='center';
-    ctx.fillText('DARK SHOP',GW/2,60);
-    ctx.fillStyle='#fd0'; ctx.font='9px monospace';
-    ctx.fillText(`所持金: ${S.gold}G`,GW/2,78);
+    if(selWeapon===null){
+      // Step 1: weapon select
+      ctx.fillStyle='#fa0'; ctx.font='bold 11px monospace'; ctx.textAlign='center';
+      ctx.fillText('FLOOR CLEAR!',GW/2,30);
+      ctx.fillStyle='#fff'; ctx.font='8px monospace';
+      ctx.fillText('武器を選択（維持もOK）',GW/2,46);
+      const cw=70,ch=95,gap=6,total=cw*4+gap*3;
+      const sx=(GW-total)/2,sy=58;
+      weaponChoices.forEach((w,i)=>{
+        const cx=sx+i*(cw+gap);
+        ctx.fillStyle=w.keep?'#0a1a0a':'#111';
+        ctx.fillRect(cx,sy,cw,ch);
+        ctx.strokeStyle=w.keep?'#4f4':'#444'; ctx.lineWidth=1; ctx.strokeRect(cx,sy,cw,ch);
+        if(w.keep){ctx.fillStyle='#4f4';ctx.font='bold 7px monospace';ctx.textAlign='center';ctx.fillText('✔ KEEP',cx+cw/2,sy+11);}
+        ctx.fillStyle=BASE_WEAPONS[w.key].color; ctx.font='bold 7px monospace'; ctx.textAlign='center';
+        ctx.fillText(w.name,cx+cw/2,w.keep?sy+23:sy+16);
+        ctx.fillStyle='#888'; ctx.font='6px monospace';
+        ctx.fillText(w.keep?'現在の武器':'新しい武器',cx+cw/2,sy+33);
+        // show current stats if keep, base stats otherwise
+        const st=w.keep?S.wStats[w.key]:BASE_WEAPONS[w.key];
+        ctx.fillStyle='#aaa';
+        ctx.fillText(`DMG×${st.dmgM.toFixed(2)}`,cx+cw/2,sy+46);
+        ctx.fillText(`連射:${st.rate}f`,cx+cw/2,sy+57);
+        ctx.fillText(`弾数:${st.pellets}`,cx+cw/2,sy+68);
+        ctx.fillStyle='#4fa'; ctx.fillText(st.detail||BASE_WEAPONS[w.key].detail,cx+cw/2,sy+80);
+      });
+      ctx.textAlign='left';
+      // bonus preview
+      ctx.fillStyle='#888'; ctx.font='7px monospace'; ctx.textAlign='center';
+      ctx.fillText('→ 武器を選んだら報酬を選択',GW/2,GH-20);
+      ctx.textAlign='left';
+    } else {
+      // Step 2: bonus select
+      ctx.fillStyle='#ff4'; ctx.font='bold 11px monospace'; ctx.textAlign='center';
+      ctx.fillText('BONUS SELECT',GW/2,30);
+      ctx.fillStyle='#aaa'; ctx.font='8px monospace';
+      ctx.fillText('武器に乗るボーナスを1つ選べ',GW/2,46);
+      const cw=88,ch=80,gap=8,total=cw*3+gap*2;
+      const sx=(GW-total)/2,sy=60;
+      bonusChoice.forEach((b,i)=>{
+        const cx=sx+i*(cw+gap);
+        ctx.fillStyle='#111'; ctx.fillRect(cx,sy,cw,ch);
+        ctx.strokeStyle='#fa0'; ctx.lineWidth=1; ctx.strokeRect(cx,sy,cw,ch);
+        ctx.fillStyle='#fa0'; ctx.font='bold 8px monospace'; ctx.textAlign='center';
+        ctx.fillText(b.name,cx+cw/2,sy+18);
+        ctx.fillStyle='#888'; ctx.font='7px monospace';
+        // wrap desc
+        ctx.fillText(b.desc,cx+cw/2,sy+34);
+      });
+      ctx.fillStyle='#666'; ctx.font='7px monospace'; ctx.textAlign='center';
+      ctx.fillText(`選択中の武器: ${BASE_WEAPONS[selWeapon].name}`,GW/2,GH-20);
+      ctx.textAlign='left';
+    }
+    return;
+  }
+
+  if(gamePhase==='shop'){
+    ctx.fillStyle='rgba(0,0,0,0.93)'; ctx.fillRect(0,0,GW,GH);
+    ctx.fillStyle='#c40'; ctx.font='bold 13px monospace'; ctx.textAlign='center';
+    ctx.fillText('DARK SHOP',GW/2,55);
+    ctx.fillStyle='#fd0'; ctx.font='9px monospace'; ctx.fillText(`所持金: ${S.gold}G`,GW/2,72);
     const iy=GH/2-55;
     shopItems.forEach((item,i)=>{
       const bx=GW/2-95,by=iy+i*54,bw=190,bh=44;
@@ -601,17 +682,15 @@ function drawOverlay(){
       ctx.fillStyle=item.bought?'#555':ok?'#fa0':'#666';
       ctx.font='bold 9px monospace'; ctx.textAlign='center';
       ctx.fillText(item.bought?'SOLD':item.name,GW/2,by+15);
-      ctx.fillStyle='#888'; ctx.font='7px monospace';
-      ctx.fillText(item.desc,GW/2,by+27);
-      ctx.fillStyle=ok?'#fd0':'#555';
-      ctx.fillText(`${item.price}G`,GW/2,by+39);
+      ctx.fillStyle='#888'; ctx.font='7px monospace'; ctx.fillText(item.desc,GW/2,by+27);
+      ctx.fillStyle=ok?'#fd0':'#555'; ctx.fillText(`${item.price}G`,GW/2,by+39);
     });
-    ctx.fillStyle='#c40'; ctx.font='bold 10px monospace';
-    ctx.fillText('[ 次のフロアへ ]',GW/2,GH-40);
+    ctx.fillStyle='#c40'; ctx.font='bold 10px monospace'; ctx.fillText('[ 次のフロアへ ]',GW/2,GH-40);
     ctx.fillStyle=S.isBoss?'#f44':'#666'; ctx.font='8px monospace';
     ctx.fillText(S.isBoss?`⚠ FL${S.floor}: BOSS FLOOR`:`FLOOR ${S.floor}`,GW/2,GH-25);
     ctx.textAlign='left'; return;
   }
+
   if(gamePhase==='gameover'){
     ctx.fillStyle='rgba(0,0,0,0.93)'; ctx.fillRect(0,0,GW,GH);
     ctx.fillStyle='#f22'; ctx.font='bold 24px monospace'; ctx.textAlign='center';
@@ -619,8 +698,7 @@ function drawOverlay(){
     ctx.fillStyle='#888'; ctx.font='8px monospace';
     [`到達フロア: ${S.floor}`,`総キル数: ${S.kills}`,`総ダメージ: ${S.totalDmg.toLocaleString()}`,`所持金: ${S.gold}G`,`スコア: ${S.score.toLocaleString()}`]
       .forEach((l,i)=>ctx.fillText(l,GW/2,GH/2-40+i*18));
-    ctx.fillStyle='#f84'; ctx.font='bold 10px monospace';
-    ctx.fillText('タップで再挑戦',GW/2,GH/2+60);
+    ctx.fillStyle='#f84'; ctx.font='bold 10px monospace'; ctx.fillText('タップで再挑戦',GW/2,GH/2+60);
     ctx.textAlign='left'; return;
   }
 }
@@ -628,29 +706,19 @@ function drawOverlay(){
 function drawTitle(){
   ctx.fillStyle='#08080f'; ctx.fillRect(0,0,GW,GH);
   ctx.fillStyle='rgba(80,0,100,0.15)';
-  for(let i=0;i<GW;i+=32){ctx.fillRect(i,0,1,GH);}
+  for(let i=0;i<GW;i+=32) ctx.fillRect(i,0,1,GH);
   ctx.fillStyle='#c40'; ctx.font='bold 28px monospace'; ctx.textAlign='center';
   ctx.fillText('DARK DESCENT',GW/2,GH/2-80);
-  ctx.fillStyle='#555'; ctx.font='8px monospace';
-  ctx.fillText('— ROGUELIKE FALLING SHOOTER —',GW/2,GH/2-58);
+  ctx.fillStyle='#555'; ctx.font='8px monospace'; ctx.fillText('— ROGUELIKE FALLING SHOOTER —',GW/2,GH/2-58);
   ctx.fillStyle='#999'; ctx.font='8px monospace';
   ctx.fillText('深淵の塔を落下し、闇の王を倒せ。',GW/2,GH/2-32);
-  ctx.fillText('敵が強すぎるなら落下して回避せよ。',GW/2,GH/2-18);
-  ctx.fillStyle='#444'; ctx.font='7px monospace';
-  ctx.fillText('← → 移動  SPACE/Z: 射撃（反動で浮く）',GW/2,GH/2+8);
-  ctx.fillStyle='#f84'; ctx.font='bold 11px monospace';
-  const blink=Math.sin(frame*0.08)>0;
-  if(blink) ctx.fillText('タップ / キーでスタート',GW/2,GH/2+38);
+  ctx.fillText('敵を倒せば金になる。回避してもいい。',GW/2,GH/2-18);
+  ctx.fillStyle='#444'; ctx.font='7px monospace'; ctx.fillText('← → 移動  SPACE/Z: 射撃（反動で浮く）',GW/2,GH/2+8);
+  if(Math.sin(frame*0.08)>0){ctx.fillStyle='#f84'; ctx.font='bold 11px monospace'; ctx.fillText('タップ / キーでスタート',GW/2,GH/2+38);}
   ctx.textAlign='left';
 }
 
-// ===== LOOP =====
-function loop(){
-  frame++;
-  update();
-  draw();
-  requestAnimationFrame(loop);
-}
+function loop(){frame++;update();draw();requestAnimationFrame(loop);}
 loop();
 </script>
 </body>
