@@ -61,8 +61,8 @@ window.addEventListener('keyup',e=>{
 // ── JOYSTICK ──────────────────────────────────────────
 const stickWrap=document.getElementById('stick-wrap');
 const stickKnob=document.getElementById('stick-knob');
-const STICK_R=30; // max knob travel radius
-let stickTouchId=null, stickOriginX=0;
+const STICK_R=30;
+let stickTouchId=null, stickRatio=0; // -1〜1の連続値
 
 function stickMove(cx){
   const wrap=stickWrap.getBoundingClientRect();
@@ -70,9 +70,10 @@ function stickMove(cx){
   const dx=cx-ox;
   const clamped=Math.max(-STICK_R,Math.min(STICK_R,dx));
   stickKnob.style.transform=`translateX(${clamped}px)`;
-  const ratio=clamped/STICK_R;
-  keys.left=ratio<-0.25;
-  keys.right=ratio>0.25;
+  stickRatio=clamped/STICK_R; // -1〜1
+  // left/rightは緩急用に連続値から計算
+  keys.left=stickRatio<-0.15;
+  keys.right=stickRatio>0.15;
 }
 stickWrap.addEventListener('touchstart',e=>{
   e.preventDefault();
@@ -263,15 +264,18 @@ function update(){
   if(S.onGround){S.fallTime=0;S.gravity=BASE_GRAV;}
   else{S.fallTime++;S.gravity=Math.min(MAX_GRAV,BASE_GRAV+S.fallTime*FALL_ACCEL);}
 
-  // movement
-  const spd=3.2;
-  if(keys.left)  S.vx+=(-spd-S.vx)*0.25;
-  else if(keys.right) S.vx+=( spd-S.vx)*0.25;
-  else S.vx*=0.75;
+  // 移動：スティックの傾き量で速度に緩急（0.15〜1.0の範囲を0〜3.2にマッピング）
+  const absR=Math.abs(stickRatio);
+  const speedScale=absR<0.15?0:Math.pow((absR-0.15)/0.85,1.4); // 緩やかに加速
+  const spd=3.2*speedScale;
+  if(keys.left)  S.vx+=(-spd-S.vx)*0.2;
+  else if(keys.right) S.vx+=( spd-S.vx)*0.2;
+  else S.vx*=0.72;
   S.vy+=S.gravity;
   S.vy=Math.max(S.vy,-18); S.vy=Math.min(S.vy,TERM_VEL);
   S.x+=S.vx; S.y+=S.vy; S.onGround=false;
-  if(S.x<0)S.x=GW; if(S.x>GW)S.x=0;
+  if(S.x<PLAYER_W/2) S.x=PLAYER_W/2;
+  if(S.x>GW-PLAYER_W/2) S.x=GW-PLAYER_W/2;
 
   if(S.vy>0){
     for(const p of platforms){
@@ -437,18 +441,20 @@ function handleOverlayClick(mx,my){
   if(gamePhase==='title'||gamePhase==='gameover'){initGame();return;}
 
   if(gamePhase==='weaponSelect'){
-    // Step 1: pick weapon (4 cards)
     if(selWeapon===null){
+      // Step1: 武器カード（4枚）
       const cw=70,ch=95,gap=6,total=cw*4+gap*3;
-      const sx=(GW-total)/2,sy=GH/2-140;
+      const sx=(GW-total)/2,sy=58;
       weaponChoices.forEach((w,i)=>{
         const cx=sx+i*(cw+gap);
-        if(mx>=cx&&mx<=cx+cw&&my>=sy&&my<=sy+ch) selWeapon=w.key;
+        if(mx>=cx&&mx<=cx+cw&&my>=sy&&my<=sy+ch){
+          selWeapon=w.key;
+        }
       });
     } else {
-      // Step 2: pick bonus (3 cards)
+      // Step2: ボーナスカード（3枚）
       const cw=88,ch=80,gap=8,total=cw*3+gap*2;
-      const sx=(GW-total)/2,sy=GH/2+10;
+      const sx=(GW-total)/2,sy=170;
       bonusChoice.forEach((b,i)=>{
         const cx=sx+i*(cw+gap);
         if(mx>=cx&&mx<=cx+cw&&my>=sy&&my<=sy+ch){
